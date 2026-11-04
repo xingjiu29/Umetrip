@@ -10,19 +10,21 @@ const hideWholeResponse = new Set([
   "1370286"
 ]);
 
+hideWholeResponse.delete("1000002");
+
 if (hideWholeResponse.has(rpid)) {
   $done({
     status: "HTTP/1.1 404 Not Found",
     headers: res.headers || {},
     body: ""
   });
-} else if (rpid !== "1100001") {
+} else if (rpid !== "1100001" && rpid !== "1000002") {
   $done({});
 } else {
   const body = res.body;
 
   if (!(body instanceof Uint8Array)) {
-    console.log("UMETRIP: 1100001 body is not Uint8Array; passthrough");
+    console.log("UMETRIP: response body is not Uint8Array; passthrough");
     $done({});
   } else {
     const decoder = new TextDecoder();
@@ -35,10 +37,7 @@ if (hideWholeResponse.has(rpid)) {
         const byte = bytes[pos++];
         value += (byte & 0x7f) * Math.pow(2, shift);
 
-        if ((byte & 0x80) === 0) {
-          return [value, pos];
-        }
-
+        if ((byte & 0x80) === 0) return [value, pos];
         shift += 7;
       }
 
@@ -71,9 +70,7 @@ if (hideWholeResponse.has(rpid)) {
         let payloadStart;
         let payloadEnd;
 
-        if (fieldNo <= 0) {
-          throw new Error("Invalid Protobuf field number");
-        }
+        if (fieldNo <= 0) throw new Error("Invalid field number");
 
         if (wireType === 0) {
           [, pos] = readVarint(bytes, pos);
@@ -91,9 +88,7 @@ if (hideWholeResponse.has(rpid)) {
           throw new Error("Unsupported Protobuf wire type: " + wireType);
         }
 
-        if (pos > bytes.length) {
-          throw new Error("Truncated Protobuf field");
-        }
+        if (pos > bytes.length) throw new Error("Truncated Protobuf field");
 
         fields.push({
           fieldNo,
@@ -109,21 +104,18 @@ if (hideWholeResponse.has(rpid)) {
     }
 
     function concat(parts) {
-      let totalLength = 0;
+      let total = 0;
+      for (const part of parts) total += part.length;
 
-      for (const part of parts) {
-        totalLength += part.length;
-      }
-
-      const output = new Uint8Array(totalLength);
+      const out = new Uint8Array(total);
       let offset = 0;
 
       for (const part of parts) {
-        output.set(part, offset);
+        out.set(part, offset);
         offset += part.length;
       }
 
-      return output;
+      return out;
     }
 
     function wrapLengthField(fieldNo, payload) {
@@ -134,12 +126,19 @@ if (hideWholeResponse.has(rpid)) {
       ]);
     }
 
-    function getPayload(bytes, field) {
+    function payloadOf(bytes, field) {
       return bytes.subarray(field.payloadStart, field.payloadEnd);
     }
 
-    function shouldRemoveModule(record) {
+    function moduleShouldBeRemoved(record, currentRpid) {
       const text = decoder.decode(record);
+
+      if (currentRpid === "1000002") {
+        return (
+          /"groupId"\s*:\s*111357/.test(text) ||
+          /"groupId"\s*:\s*111442/.test(text)
+        );
+      }
 
       if (
         /"groupId"\s*:\s*111402/.test(text) ||
@@ -155,16 +154,16 @@ if (hideWholeResponse.has(rpid)) {
       );
     }
 
-    function cleanModuleList(bytes) {
+    function filterRepeatedModules(bytes, fieldNo, currentRpid) {
       const fields = parseFields(bytes);
       const kept = [];
       let removed = 0;
 
       for (const field of fields) {
         if (
-          field.fieldNo === 5 &&
+          field.fieldNo === fieldNo &&
           field.wireType === 2 &&
-          shouldRemoveModule(getPayload(bytes, field))
+          moduleShouldBeRemoved(payloadOf(bytes, field), currentRpid)
         ) {
           removed++;
         } else {
@@ -175,15 +174,16 @@ if (hideWholeResponse.has(rpid)) {
       return [concat(kept), removed];
     }
 
-    function cleanInner(bytes) {
+    function cleanMyPageList(bytes) {
       const fields = parseFields(bytes);
       const kept = [];
       let removed = 0;
 
       for (const field of fields) {
         if (field.fieldNo === 11 && field.wireType === 2) {
-          const [newList, count] = cleanModuleList(getPayload(bytes, field));
-          kept.push(wrapLengthField(11, newList));
+          const [list, count] =
+            filterRepeatedModules(payloadOf(bytes, field), 5, "1100001");
+          kept.push(wrapLengthField(11, list));
           removed += count;
         } else {
           kept.push(bytes.subarray(field.start, field.end));
@@ -193,15 +193,71 @@ if (hideWholeResponse.has(rpid)) {
       return [concat(kept), removed];
     }
 
-    function cleanOuter(bytes) {
+    function cleanMyPageOuter(bytes) {
       const fields = parseFields(bytes);
       const kept = [];
       let removed = 0;
 
       for (const field of fields) {
         if (field.fieldNo === 1 && field.wireType === 2) {
-          const [newInner, count] = cleanInner(getPayload(bytes, field));
-          kept.push(wrapLengthField(1, newInner));
+          const [inner, count] = cleanMyPageList(payloadOf(bytes, field));
+          kept.push(wrapLengthField(1, inner));
+          removed += count;
+        } else {
+          kept.push(bytes.subarray(field.start, field.end));
+        }
+      }
+
+      return [concat(kept), removed];
+    }
+
+    function cleanHomeSectionList(bytes) {
+      const fields = parseFields(bytes);
+      const kept = [];
+      let removed = 0;
+
+      for (const field of fields) {
+        if (field.fieldNo === 5 && field.wireType === 2) {
+          const [list, count] =
+            filterRepeatedModules(payloadOf(bytes, field), 5, "1000002");
+          kept.push(wrapLengthField(5, list));
+          removed += count;
+        } else {
+          kept.push(bytes.subarray(field.start, field.end));
+        }
+      }
+
+      return [concat(kept), removed];
+    }
+
+    function cleanHomePageData(bytes) {
+      const fields = parseFields(bytes);
+      const kept = [];
+      let removed = 0;
+
+      for (const field of fields) {
+        if (field.fieldNo === 2 && field.wireType === 2) {
+          const [sectionList, count] =
+            cleanHomeSectionList(payloadOf(bytes, field));
+          kept.push(wrapLengthField(2, sectionList));
+          removed += count;
+        } else {
+          kept.push(bytes.subarray(field.start, field.end));
+        }
+      }
+
+      return [concat(kept), removed];
+    }
+
+    function cleanHomeOuter(bytes) {
+      const fields = parseFields(bytes);
+      const kept = [];
+      let removed = 0;
+
+      for (const field of fields) {
+        if (field.fieldNo === 1 && field.wireType === 2) {
+          const [pageData, count] = cleanHomePageData(payloadOf(bytes, field));
+          kept.push(wrapLengthField(1, pageData));
           removed += count;
         } else {
           kept.push(bytes.subarray(field.start, field.end));
@@ -218,7 +274,12 @@ if (hideWholeResponse.has(rpid)) {
 
       for (const field of fields) {
         if (field.fieldNo === 7 && field.wireType === 2) {
-          const [newPayload, count] = cleanOuter(getPayload(body, field));
+          const payload = payloadOf(body, field);
+          const [newPayload, count] =
+            rpid === "1100001"
+              ? cleanMyPageOuter(payload)
+              : cleanHomeOuter(payload);
+
           kept.push(wrapLengthField(7, newPayload));
           removed += count;
         } else {
@@ -230,7 +291,7 @@ if (hideWholeResponse.has(rpid)) {
         console.log("UMETRIP removed module records: " + removed);
         $done({ body: concat(kept) });
       } else {
-        console.log("UMETRIP: no target modules found; passthrough");
+        console.log("UMETRIP: target modules not found; passthrough");
         $done({});
       }
     } catch (error) {
