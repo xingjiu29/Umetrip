@@ -116,11 +116,19 @@ if (!isUmetripNative && EMPTY_PAYLOAD_RESPONSE.indexOf(rpid) < 0) {
     function payloadOf(bytes, field) {
       return bytes.subarray(field.payloadStart, field.payloadEnd);
     }
+    function emptyPage() {
+      return concat([
+        wrapLengthField(1, new Uint8Array(0)),
+        new Uint8Array([0x10, 0x00]),
+        new Uint8Array([0x20, 0x00])
+      ]);
+    }
     function emptyPayload(bytes) {
       const kept = [];
+      const page = emptyPage();
       for (const field of parseFields(bytes)) {
         if (field.fieldNo === 7 && field.wireType === 2) {
-          kept.push(wrapLengthField(7, new Uint8Array(0)));
+          kept.push(wrapLengthField(7, page));
         } else {
           kept.push(bytes.subarray(field.start, field.end));
         }
