@@ -7,8 +7,7 @@ function rpidFromUrl(url) {
 }
 const rpid =
   String(headers.rpid || headers.Rpid || "").trim() || rpidFromUrl(req.url);
-const EMPTY_PAYLOAD_RESPONSE = ["1420002", "1370286", "1430064", "1430002"];
-const HOME_MODE = "white";
+const EMPTY_PAYLOAD_RESPONSE = ["1000019", "1420002", "1370286", "1430064"];
 const HOME_KEEP_GROUPS = [
   10277, 10691, 111358, 111411, 111352, 111406, 111407, 111365, 111448
 ];
@@ -196,7 +195,7 @@ if (!isUmetripNative && EMPTY_PAYLOAD_RESPONSE.indexOf(rpid) < 0) {
         }
         const info = item.info;
         let remove;
-        if (isHome && HOME_MODE === "white") {
+        if (isHome) {
           remove =
             HOME_KEEP_GROUPS.indexOf(info.groupId) < 0 ||
             (REMOVE_ADVERT_SECTIONS && info.advert);
@@ -358,16 +357,15 @@ if (!isUmetripNative && EMPTY_PAYLOAD_RESPONSE.indexOf(rpid) < 0) {
           if (field.fieldNo === 7 && field.wireType === 2) {
             const payload = payloadOf(body, field);
             const isMyPage = rpid === "1100001";
-            let newPayload = isMyPage ? cleanMyPageOuter(payload, stats) : payload;
-            if (!isMyPage && HOME_MODE !== "off") {
-              newPayload = cleanHomeOuter(payload, stats);
-              if (stats.removed === 0) {
-                const result = deepClean(payload, 4);
-                if (result[1] > 0) {
-                  newPayload = result[0];
-                  stats.removed = result[1];
-                  usedDeep = true;
-                }
+            let newPayload = isMyPage
+              ? cleanMyPageOuter(payload, stats)
+              : cleanHomeOuter(payload, stats);
+            if (!isMyPage && stats.removed === 0) {
+              const result = deepClean(payload, 4);
+              if (result[1] > 0) {
+                newPayload = result[0];
+                stats.removed = result[1];
+                usedDeep = true;
               }
             }
             if (stats.removed > 0) {
@@ -386,7 +384,6 @@ if (!isUmetripNative && EMPTY_PAYLOAD_RESPONSE.indexOf(rpid) < 0) {
               ": sections=" +
               stats.total +
               (stats.isHome ? " (home)" : "") +
-              (HOME_MODE === "off" ? " filter=off" : " mode=" + HOME_MODE) +
               " removed=" +
               stats.removed +
               (usedDeep ? " (deep)" : "") +
